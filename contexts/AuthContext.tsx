@@ -2,16 +2,10 @@
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { useToast } from "@/hooks/use-toast"
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile,
-} from "firebase/auth"
-import { auth, db } from "@/lib/firebase"
-import { doc, setDoc, getDoc } from "firebase/firestore"
+import { useToast } from "@/components/ui/use-toast"
+import { PrismaClient } from "@prisma/client"
+
+const prisma = new PrismaClient()
 
 type User = {
   id: string
@@ -36,72 +30,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter()
   const { toast } = useToast()
 
-  // Check if user is logged in on mount
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const fetchUser = async () => {
       setIsLoading(true)
-
-      if (firebaseUser) {
-        // Get additional user data from Firestore
-        try {
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
-
-          const userData = {
-            id: firebaseUser.uid,
-            name: firebaseUser.displayName || userDoc.data()?.name || "User",
-            email: firebaseUser.email || "",
-          }
-
-          setUser(userData)
-        } catch (error) {
-          console.error("Error fetching user data:", error)
-          setUser({
-            id: firebaseUser.uid,
-            name: firebaseUser.displayName || "User",
-            email: firebaseUser.email || "",
-          })
-        }
-      } else {
+      try {
+        const response = await fetch("/api/auth/me")
+        const userData = await response.json()
+        setUser(userData)
+      } catch (error) {
+        console.error("Error fetching user data:", error)
         setUser(null)
       }
-
       setIsLoading(false)
-    })
+    }
 
-    return () => unsubscribe()
+    fetchUser()
   }, [])
 
   const login = async (email: string, password: string) => {
     try {
       setIsLoading(true)
-      const userCredential = await signInWithEmailAndPassword(auth, email, password)
-      const firebaseUser = userCredential.user
-
-      // Get additional user data from Firestore
-      const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
-
-      if (!userDoc.exists()) {
-        // Create user document if it doesn't exist
-        await setDoc(doc(db, "users", firebaseUser.uid), {
-          name: firebaseUser.displayName || "User",
-          email: firebaseUser.email,
-          createdAt: new Date(),
-        })
-      }
-
-      toast({
-        title: "Login Successful",
-        description: `Welcome back, ${firebaseUser.displayName || "User"}!`,
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
       })
-
-      return true
+      const data = await response.json()
+      if (data.success) {
+        setUser(data.user)
+        toast({ title: "Login Successful", description: `Welcome back, ${data.user.name}!` })
+        return true
+      }
+      throw new Error(data.message)
     } catch (error) {
       console.error("Login error:", error)
-      toast({
-        title: "Login Failed",
-        description: error.message || "Invalid email or password",
-        variant: "destructive",
-      })
+      toast({ title: "Login Failed", description: error.message, variant: "destructive" })
       return false
     } finally {
       setIsLoading(false)
@@ -111,39 +74,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signup = async (name: string, email: string, password: string) => {
     try {
       setIsLoading(true)
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
-      const firebaseUser = userCredential.user
-
-      // Update profile with name
-      await updateProfile(firebaseUser, { displayName: name })
-
-      // Create user document in Firestore
-      await setDoc(doc(db, "users", firebaseUser.uid), {
-        name,
-        email,
-        createdAt: new Date(),
+      const response = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
       })
-
-      // Create empty wishlist for the user
-      await setDoc(doc(db, "wishlists", firebaseUser.uid), {
-        userId: firebaseUser.uid,
-        products: [],
-        createdAt: new Date(),
-      })
-
-      toast({
-        title: "Signup Successful",
-        description: `Welcome, ${name}!`,
-      })
-
-      return true
+      const data = await response.json()
+      if (data.success) {
+        setUser(data.user)
+        toast({ title: "Signup Successful", description: `Welcome, ${name}!` })
+        return true
+      }
+      throw new Error(data.message)
     } catch (error) {
       console.error("Signup error:", error)
-      toast({
-        title: "Signup Failed",
-        description: error.message || "Failed to create account",
-        variant: "destructive",
-      })
+      toast({ title: "Signup Failed", description: error.message, variant: "destructive" })
       return false
     } finally {
       setIsLoading(false)
@@ -152,26 +97,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      await signOut(auth)
-
-      // Clear any user-specific data from localStorage
-      localStorage.removeItem("cart")
-      localStorage.removeItem("lastOrderDetails")
-      localStorage.removeItem("userOrders")
-
+      await fetch("/api/auth/logout", { method: "POST" })
+      setUser(null)
+      localStorage.clear()
       router.push("/")
-
-      toast({
-        title: "Logged Out",
-        description: "You have been successfully logged out.",
-      })
+      toast({ title: "Logged Out", description: "You have been successfully logged out." })
     } catch (error) {
       console.error("Logout error:", error)
-      toast({
-        title: "Logout Failed",
-        description: "An error occurred while logging out.",
-        variant: "destructive",
-      })
+      toast({ title: "Logout Failed", description: "An error occurred while logging out.", variant: "destructive" })
     }
   }
 
@@ -189,4 +122,3 @@ export function useAuth() {
   }
   return context
 }
-
